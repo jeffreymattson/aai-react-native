@@ -1,6 +1,6 @@
 import '../lib/webInit'
 import React, { useState } from 'react'
-import { Alert, StyleSheet, View, Text, TouchableOpacity, TextInput, Platform } from 'react-native'
+import { StyleSheet, View, Text, TouchableOpacity, TextInput } from 'react-native'
 import { supabase } from '../lib/supabase'
 import { Button } from '@rneui/themed'
 
@@ -12,25 +12,19 @@ export default function SignIn({ onNavigateToSignUp }: SignInProps) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
-
-  const showAlert = (title: string, message: string) => {
-    if (Platform.OS === 'web') {
-      window.alert(`${title}\n\n${message}`)
-    } else {
-      Alert.alert(title, message, [{ text: 'OK' }])
-    }
-  }
+  const [errorMessage, setErrorMessage] = useState('')
 
   async function signInWithEmail() {
     console.log('Sign in attempted with:', { email, password })
     
     if (!email || !password) {
       console.log('Validation failed - missing email or password')
-      showAlert('Missing Information', 'Please enter both email and password to sign in.')
+      setErrorMessage('Please enter both email and password to sign in.')
       return
     }
 
     setLoading(true)
+    setErrorMessage('')
     try {
       const { error } = await supabase.auth.signInWithPassword({
         email: email,
@@ -44,15 +38,15 @@ export default function SignIn({ onNavigateToSignUp }: SignInProps) {
             error.message.includes('Invalid email or password') ||
             error.message.includes('Email not confirmed') ||
             error.message.includes('Validation failed - missing email or password')) {
-          showAlert('Sign In Failed', 'Incorrect email or password. Please try again.')
+          setErrorMessage('Incorrect email or password. Please try again.')
         } else {
           console.error('Sign in error:', error)
-          showAlert('Error', error.message)
+          setErrorMessage(error.message)
         }
       }
     } catch (err) {
       console.error('Unexpected error during sign in:', err)
-      showAlert('Error', 'An unexpected error occurred. Please try again.')
+      setErrorMessage('An unexpected error occurred. Please try again.')
     } finally {
       setLoading(false)
     }
@@ -60,19 +54,20 @@ export default function SignIn({ onNavigateToSignUp }: SignInProps) {
 
   async function resetPassword() {
     if (!email) {
-      showAlert('Error', 'Please enter your email address')
+      setErrorMessage('Please enter your email address')
       return
     }
     
     setLoading(true)
+    setErrorMessage('')
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
       redirectTo: 'http://localhost:3000/reset-password'
     })
 
     if (error) {
-      showAlert('Error', error.message)
+      setErrorMessage(error.message)
     } else {
-      showAlert('Password Reset Email Sent', 'Please check your email for the password reset link.')
+      setErrorMessage('Password reset email sent. Please check your inbox.')
     }
     setLoading(false)
   }
@@ -83,7 +78,10 @@ export default function SignIn({ onNavigateToSignUp }: SignInProps) {
         <Text style={styles.label}>Email</Text>
         <TextInput
           style={styles.input}
-          onChangeText={(text) => setEmail(text)}
+          onChangeText={(text) => {
+            setEmail(text)
+            setErrorMessage('')
+          }}
           value={email}
           placeholder="email@address.com"
           autoCapitalize="none"
@@ -94,7 +92,10 @@ export default function SignIn({ onNavigateToSignUp }: SignInProps) {
         <Text style={styles.label}>Password</Text>
         <TextInput
           style={styles.input}
-          onChangeText={(text) => setPassword(text)}
+          onChangeText={(text) => {
+            setPassword(text)
+            setErrorMessage('')
+          }}
           value={password}
           secureTextEntry={true}
           placeholder="Password"
@@ -114,6 +115,11 @@ export default function SignIn({ onNavigateToSignUp }: SignInProps) {
           buttonStyle={styles.button}
         />
       </View>
+      {errorMessage ? (
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>{errorMessage}</Text>
+        </View>
+      ) : null}
       <View style={styles.signUpContainer}>
         <Text style={styles.signUpText}>Don't have an account? </Text>
         <TouchableOpacity onPress={onNavigateToSignUp} disabled={loading}>
@@ -169,5 +175,16 @@ const styles = StyleSheet.create({
   linkText: {
     color: '#007AFF',
     fontSize: 16,
+  },
+  errorContainer: {
+    marginTop: 10,
+    padding: 10,
+    backgroundColor: '#ffebee',
+    borderRadius: 4,
+  },
+  errorText: {
+    color: '#c62828',
+    fontSize: 14,
+    textAlign: 'center',
   },
 }) 
