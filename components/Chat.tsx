@@ -1,282 +1,350 @@
-import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, Dimensions, Text, SafeAreaView, Keyboard, Platform } from 'react-native';
-import WebView from 'react-native-webview';
-import { Button } from '@rneui/themed';
+import React, { useState, useRef, useEffect } from 'react';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  ScrollView,
+  StyleSheet,
+  KeyboardAvoidingView,
+  Platform,
+  ActivityIndicator,
+} from 'react-native';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { supabase } from '../lib/supabase';
+import { Ionicons } from '@expo/vector-icons';
+import * as XLSX from 'xlsx';
+import * as FileSystem from 'expo-file-system';
+import { Asset } from 'expo-asset';
+
+interface Message {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+interface SurveyQuestion {
+  category?: string;
+  priority?: number;
+  question: string;
+  followUp?: string;
+}
 
 interface ChatProps {
   onClose: () => void;
 }
 
-const DEV_MACHINE_IP = '192.168.1.22'; // Replace with your actual IP
-const { width: windowWidth, height: windowHeight } = Dimensions.get('window');
-
-// CSS to inject into the WebView
-const injectedCSS = `
-  /* Base styles */
-  body {
-    margin: 0 !important;
-    padding: 0 !important;
-    height: 100vh !important;
-    overflow: hidden !important;
-  }
-
-  /* Container styles */
-  .gradio-container {
-    margin: 0 !important;
-    padding: 0 !important;
-    max-width: none !important;
-    height: 100vh !important;
-    display: flex !important;
-    flex-direction: column !important;
-  }
-
-  /* Chat container */
-  .gradio-chatbot {
-    flex: 1 !important;
-    min-height: calc(100vh - 120px) !important;
-    height: calc(100vh - 120px) !important;
-    margin: 0 !important;
-    padding: 16px !important;
-    overflow-y: auto !important;
-    -webkit-overflow-scrolling: touch !important;
-  }
-
-  /* Message styles */
-  .message {
-    max-width: 85% !important;
-    margin: 8px 0 !important;
-    padding: 12px !important;
-    border-radius: 12px !important;
-    background: #f0f0f0 !important;
-  }
-
-  /* Input container */
-  .input-row {
-    position: fixed !important;
-    bottom: 0 !important;
-    left: 0 !important;
-    right: 0 !important;
-    padding: 12px !important;
-    background: white !important;
-    border-top: 1px solid #eee !important;
-    display: flex !important;
-    gap: 8px !important;
-    z-index: 1000 !important;
-  }
-
-  /* Input box */
-  .input-row textarea {
-    flex: 1 !important;
-    min-height: 44px !important;
-    max-height: 120px !important;
-    padding: 10px !important;
-    border: 1px solid #ddd !important;
-    border-radius: 8px !important;
-    font-size: 16px !important;
-    line-height: 1.4 !important;
-    margin: 0 !important;
-  }
-
-  /* Button */
-  .input-row button {
-    min-height: 44px !important;
-    padding: 0 16px !important;
-    border-radius: 8px !important;
-  }
-
-  /* Hide unnecessary elements */
-  footer, .debug-info, .gradio-debug, .debug-area, .debug-message,
-  .footer, .app-footer, .gr-footer, .gr-form, .gr-padded, .gr-box,
-  .gr-panel, .gr-toolbar, .gr-button-tool {
-    display: none !important;
-  }
-
-  /* Ensure proper spacing */
-  .wrap {
-    max-width: none !important;
-    margin: 0 !important;
-    padding: 0 !important;
-    height: 100vh !important;
-  }
-
-  /* Add padding for iOS safe area */
-  @supports (padding: max(0px)) {
-    .input-row {
-      padding-bottom: max(12px, env(safe-area-inset-bottom)) !important;
-    }
-  }
-`;
-
-// JavaScript to inject into the WebView
-const injectedJavaScript = `
-  function applyStyles() {
-    const style = document.createElement('style');
-    style.textContent = ${JSON.stringify(injectedCSS)};
-    document.head.appendChild(style);
-
-    // Add viewport meta tag
-    let viewport = document.querySelector('meta[name="viewport"]');
-    if (!viewport) {
-      viewport = document.createElement('meta');
-      viewport.name = 'viewport';
-      document.head.appendChild(viewport);
-    }
-    viewport.content = 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover';
-
-    // Log dimensions for debugging
-    console.log('Window dimensions:', window.innerWidth, window.innerHeight);
-    console.log('Document dimensions:', document.documentElement.clientWidth, document.documentElement.clientHeight);
-  }
-
-  // Function to clear input
-  function clearInput() {
-    const textarea = document.querySelector('.input-row textarea');
-    if (textarea) {
-      textarea.value = '';
-    }
-  }
-
-  // Function to set up input clearing
-  function setupInputClearing() {
-    // Find the textarea
-    const textarea = document.querySelector('.input-row textarea');
-    if (textarea) {
-      // Handle Enter key press
-      textarea.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-          e.preventDefault();
-          // Clear after a short delay to ensure the message is sent
-          setTimeout(clearInput, 100);
-        }
-      });
-    }
-
-    // Find the submit button
-    const submitButton = document.querySelector('.input-row button');
-    if (submitButton) {
-      // Add click event listener
-      submitButton.addEventListener('click', () => {
-        // Clear after a short delay to ensure the message is sent
-        setTimeout(clearInput, 100);
-      });
-    }
-  }
-
-  // Apply styles immediately
-  applyStyles();
-  
-  // Also apply styles when the DOM changes
-  new MutationObserver(applyStyles).observe(document.body, { 
-    childList: true, 
-    subtree: true 
-  });
-
-  // Set up input clearing
-  setupInputClearing();
-
-  // Also set up input clearing when the DOM changes
-  new MutationObserver(setupInputClearing).observe(document.body, {
-    childList: true,
-    subtree: true
-  });
-
-  true;
-`;
-
 export default function Chat({ onClose }: ChatProps) {
-  const [userId, setUserId] = React.useState<string | null>(null);
-  const [keyboardHeight, setKeyboardHeight] = useState(0);
-  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [inputText, setInputText] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [surveyQuestions, setSurveyQuestions] = useState<SurveyQuestion[]>([]);
+  const [usedQuestions, setUsedQuestions] = useState<Set<number>>(new Set());
+  const scrollViewRef = useRef<ScrollView>(null);
 
+  // Load survey questions from Excel
   useEffect(() => {
-    const keyboardWillShow = Keyboard.addListener(
-      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
-      (e) => {
-        setKeyboardHeight(e.endCoordinates.height);
-        setIsKeyboardVisible(true);
-      }
-    );
+    const loadSurveyData = async () => {
+      try {
+        // Use the document directory path
+        const fileUri = `${FileSystem.documentDirectory}survey.xlsx`;
+        console.log('Attempting to load survey from:', fileUri);
 
-    const keyboardWillHide = Keyboard.addListener(
-      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
-      () => {
-        setKeyboardHeight(0);
-        setIsKeyboardVisible(false);
-      }
-    );
+        // First, copy the file from assets to document directory if it doesn't exist
+        const fileInfo = await FileSystem.getInfoAsync(fileUri);
+        if (!fileInfo.exists) {
+          console.log('Survey file not found in document directory, copying from assets...');
+          
+          // Try to load the asset directly
+          const asset = Asset.fromModule(require('../assets/survey.xlsx'));
+          await asset.downloadAsync();
+          
+          if (!asset.localUri) {
+            console.error('Failed to load survey file from assets');
+            return;
+          }
+          
+          console.log('Found survey file at:', asset.localUri);
+          
+          // Copy the file from the asset to the document directory
+          await FileSystem.copyAsync({
+            from: asset.localUri,
+            to: fileUri
+          });
+          
+          console.log('Successfully copied survey file to:', fileUri);
+        }
 
-    return () => {
-      keyboardWillShow.remove();
-      keyboardWillHide.remove();
+        // Read the file content
+        const fileContent = await FileSystem.readAsStringAsync(fileUri, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+
+        const workbook = XLSX.read(fileContent, { type: 'base64' });
+        const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+        const data = XLSX.utils.sheet_to_json(worksheet) as SurveyQuestion[];
+        setSurveyQuestions(data);
+        console.log('Successfully loaded survey data:', data.length, 'questions');
+      } catch (error) {
+        console.error('Error loading survey data:', error);
+      }
     };
+
+    loadSurveyData();
   }, []);
 
-  React.useEffect(() => {
+  // Initialize the Gemini model
+  const genAI = new GoogleGenerativeAI('AIzaSyAd4oo7qJgo2lsr80p6B0zymVNvBuygAT4');
+  const model = genAI.getGenerativeModel({ model: 'gemini-exp-1206' });
+
+  // Get current user on component mount
+  useEffect(() => {
     const getCurrentUser = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         setUserId(user.id);
+        // Load chat history for this user
+        loadChatHistory(user.id);
       }
     };
     getCurrentUser();
   }, []);
 
-  const gradioUrl = `http://${DEV_MACHINE_IP}:7860${userId ? `?user_id=${userId}` : ''}`;
+  const loadChatHistory = async (userId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('chat_history')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: true });
 
-  // Calculate content height (total height minus header and keyboard)
-  const contentHeight = windowHeight - 56 - (isKeyboardVisible ? keyboardHeight : 0);
+      if (error) throw error;
+
+      if (data) {
+        const history = data.map(msg => ({
+          role: msg.role as 'user' | 'assistant',
+          content: msg.content,
+        }));
+        setMessages(history);
+      }
+    } catch (error) {
+      console.error('Error loading chat history:', error);
+    }
+  };
+
+  const saveMessage = async (message: Message) => {
+    if (!userId) return;
+
+    try {
+      const { error } = await supabase
+        .from('chat_history')
+        .insert({
+          user_id: userId,
+          role: message.role,
+          content: message.content,
+        });
+
+      if (error) throw error;
+    } catch (error) {
+      console.error('Error saving message:', error);
+    }
+  };
+
+  const getNextQuestion = (userResponse: string): string => {
+    // If we have no questions, return empty string
+    if (!surveyQuestions || surveyQuestions.length === 0) {
+      console.log('No survey questions available');
+      return '';
+    }
+
+    // Find unused questions that might be relevant to the user's response
+    const relevantQuestions = surveyQuestions
+      .filter((_, index) => !usedQuestions.has(index))
+      .filter(q => {
+        if (!q || !q.question) return false;
+        
+        const responseLower = (userResponse || '').toLowerCase();
+        const questionLower = q.question.toLowerCase();
+        
+        // Check if the question's category or content relates to the user's response
+        if (q.category && responseLower.includes(q.category.toLowerCase())) return true;
+        if (questionLower.includes('alcohol') && responseLower.includes('drink')) return true;
+        if (questionLower.includes('family') && (responseLower.includes('family') || responseLower.includes('wife') || responseLower.includes('husband'))) return true;
+        // Add more relevance checks as needed
+        
+        return false;
+      });
+
+    // If we found relevant questions, use one of them
+    if (relevantQuestions.length > 0) {
+      const randomIndex = Math.floor(Math.random() * relevantQuestions.length);
+      const questionIndex = surveyQuestions.indexOf(relevantQuestions[randomIndex]);
+      usedQuestions.add(questionIndex);
+      return relevantQuestions[randomIndex].question;
+    }
+
+    // If no relevant questions found, use a random unused question
+    const unusedQuestions = surveyQuestions
+      .filter((_, index) => !usedQuestions.has(index))
+      .filter(q => q && q.question); // Filter out any undefined or null questions
+    
+    if (unusedQuestions.length > 0) {
+      const randomIndex = Math.floor(Math.random() * unusedQuestions.length);
+      const questionIndex = surveyQuestions.indexOf(unusedQuestions[randomIndex]);
+      usedQuestions.add(questionIndex);
+      return unusedQuestions[randomIndex].question;
+    }
+
+    console.log('No more unused questions available');
+    return '';
+  };
+
+  const handleSend = async () => {
+    if (inputText.trim() === '' || !userId) return;
+
+    const userMessage: Message = {
+      role: 'user',
+      content: inputText.trim(),
+    };
+
+    setMessages(prev => [...prev, userMessage]);
+    await saveMessage(userMessage);
+    setInputText('');
+    setIsLoading(true);
+
+    try {
+      // Get next question based on user's response
+      const nextQuestion = getNextQuestion(userMessage.content);
+
+      if (nextQuestion) {
+        // Ask the next survey question
+        const assistantMessage: Message = {
+          role: 'assistant',
+          content: nextQuestion,
+        };
+        setMessages(prev => [...prev, assistantMessage]);
+        await saveMessage(assistantMessage);
+      } else {
+        // Switch to normal chat mode with context from survey
+        const chat = model.startChat({
+          history: [
+            {
+              role: 'user',
+              parts: [{ text: `You are an Alcoholics Anonymous (AA) counselor. Your role is to provide support, guidance, and encouragement to individuals struggling with alcohol addiction.
+You should respond with empathy, understanding, and non-judgmental advice. Your goal is to help the user reflect on their situation, consider the 12-step program,
+and provide resources or coping strategies when appropriate. Always maintain a supportive and compassionate tone.
+
+Keep responses to 100 words or less.` }]
+            },
+            {
+              role: 'model',
+              parts: [{ text: 'I understand. I will provide supportive, empathetic guidance as an AA counselor, keeping responses concise and focused on the 12-step program.' }]
+            },
+            ...messages.map(msg => ({
+              role: msg.role === 'assistant' ? 'model' : 'user',
+              parts: [{ text: msg.content }],
+            })),
+          ],
+        });
+
+        const result = await chat.sendMessage(inputText.trim());
+        const response = await result.response;
+        const text = response.text();
+        
+        const assistantMessage: Message = {
+          role: 'assistant',
+          content: text,
+        };
+
+        setMessages(prev => [...prev, assistantMessage]);
+        await saveMessage(assistantMessage);
+      }
+    } catch (error) {
+      console.error('Error sending message:', error);
+      const errorMessage: Message = {
+        role: 'assistant',
+        content: 'Sorry, there was an error processing your message.',
+      };
+      setMessages(prev => [...prev, errorMessage]);
+      await saveMessage(errorMessage);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (scrollViewRef.current) {
+      scrollViewRef.current.scrollToEnd({ animated: true });
+    }
+  }, [messages]);
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <View style={styles.container}>
-        <View style={styles.header}>
-          <Text style={styles.headerTitle}>Chat Assistant</Text>
-          <Button
-            title="Close"
-            onPress={onClose}
-            type="clear"
-            containerStyle={styles.closeButton}
-          />
-        </View>
-        
-        {userId ? (
-          <View style={[styles.webviewContainer, { height: contentHeight }]}>
-            <WebView
-              source={{ uri: gradioUrl }}
-              style={[styles.webview, { height: contentHeight }]}
-              injectedJavaScript={injectedJavaScript}
-              javaScriptEnabled={true}
-              domStorageEnabled={true}
-              startInLoadingState={true}
-              scrollEnabled={true}
-              bounces={false}
-              onError={(syntheticEvent) => {
-                console.warn('WebView error:', syntheticEvent.nativeEvent);
-              }}
-              onHttpError={(syntheticEvent) => {
-                console.warn('WebView HTTP error:', syntheticEvent.nativeEvent);
-              }}
-              onLoadEnd={() => {
-                console.log('WebView loaded. Content height:', contentHeight);
-              }}
-            />
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      style={styles.container}
+    >
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>AA Counselor</Text>
+        <TouchableOpacity onPress={onClose} style={styles.closeButton}>
+          <Ionicons name="close" size={24} color="#007AFF" />
+        </TouchableOpacity>
+      </View>
+
+      <ScrollView
+        ref={scrollViewRef}
+        style={styles.messagesContainer}
+        contentContainerStyle={styles.messagesContent}
+      >
+        {messages.map((message, index) => (
+          <View
+            key={index}
+            style={[
+              styles.messageBubble,
+              message.role === 'user' ? styles.userBubble : styles.assistantBubble,
+            ]}
+          >
+            <Text style={[
+              styles.messageText,
+              message.role === 'user' ? styles.userText : styles.assistantText,
+            ]}>
+              {message.content}
+            </Text>
           </View>
-        ) : (
-          <View style={styles.loadingContainer}>
-            <Text>Loading chat...</Text>
+        ))}
+        {isLoading && (
+          <View style={[styles.messageBubble, styles.assistantBubble]}>
+            <ActivityIndicator size="small" color="#666" />
+            <Text style={[styles.messageText, { marginLeft: 8 }]}>Thinking...</Text>
           </View>
         )}
+      </ScrollView>
+
+      <View style={styles.inputContainer}>
+        <TextInput
+          style={styles.input}
+          value={inputText}
+          onChangeText={setInputText}
+          placeholder="Type your message..."
+          placeholderTextColor="#666"
+          multiline
+          maxLength={500}
+        />
+        <TouchableOpacity
+          style={[
+            styles.sendButton,
+            (isLoading || inputText.trim() === '') && styles.sendButtonDisabled
+          ]}
+          onPress={handleSend}
+          disabled={isLoading || inputText.trim() === ''}
+        >
+          <Text style={styles.sendButtonText}>Send</Text>
+        </TouchableOpacity>
       </View>
-    </SafeAreaView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: '#fff',
-  },
   container: {
     flex: 1,
     backgroundColor: '#fff',
@@ -290,28 +358,76 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     borderBottomWidth: 1,
     borderBottomColor: '#e0e0e0',
-    zIndex: 1,
   },
   headerTitle: {
     fontSize: 20,
     fontWeight: 'bold',
   },
   closeButton: {
-    marginLeft: 'auto',
+    padding: 8,
   },
-  webviewContainer: {
-    backgroundColor: '#fff',
-    width: windowWidth,
-    minHeight: 200,
-  },
-  webview: {
-    backgroundColor: '#fff',
-    width: '100%',
-    minHeight: 200,
-  },
-  loadingContainer: {
+  messagesContainer: {
     flex: 1,
-    justifyContent: 'center',
+  },
+  messagesContent: {
+    padding: 16,
+  },
+  messageBubble: {
+    maxWidth: '80%',
+    padding: 12,
+    borderRadius: 20,
+    marginBottom: 8,
+    flexDirection: 'row',
     alignItems: 'center',
+  },
+  userBubble: {
+    alignSelf: 'flex-end',
+    backgroundColor: '#007AFF',
+  },
+  assistantBubble: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#E9E9EB',
+  },
+  messageText: {
+    fontSize: 16,
+    lineHeight: 20,
+  },
+  userText: {
+    color: '#fff',
+  },
+  assistantText: {
+    color: '#000',
+  },
+  inputContainer: {
+    flexDirection: 'row',
+    padding: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#E9E9EB',
+    backgroundColor: '#fff',
+  },
+  input: {
+    flex: 1,
+    backgroundColor: '#F2F2F7',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    marginRight: 8,
+    fontSize: 16,
+    maxHeight: 100,
+  },
+  sendButton: {
+    backgroundColor: '#007AFF',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    justifyContent: 'center',
+  },
+  sendButtonDisabled: {
+    backgroundColor: '#ccc',
+  },
+  sendButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
   },
 }); 
