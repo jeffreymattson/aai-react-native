@@ -16,17 +16,21 @@ import { Ionicons } from '@expo/vector-icons';
 import * as XLSX from 'xlsx';
 import * as FileSystem from 'expo-file-system';
 import { Asset } from 'expo-asset';
+import SummaryGraph from './SummaryGraph';
 
 interface Message {
-  role: 'user' | 'assistant';
+  role: 'user' | 'model';
   content: string;
 }
 
 interface SurveyQuestion {
-  category?: string;
-  priority?: number;
-  question: string;
-  followUp?: string;
+  [key: string]: string | number | boolean | null;
+}
+
+interface PriorityArea {
+  name: string;
+  score: number;
+  explanation: string;
 }
 
 interface ChatProps {
@@ -40,6 +44,8 @@ export default function Chat({ onClose }: ChatProps) {
   const [userId, setUserId] = useState<string | null>(null);
   const [surveyQuestions, setSurveyQuestions] = useState<SurveyQuestion[]>([]);
   const [usedQuestions, setUsedQuestions] = useState<Set<number>>(new Set());
+  const [priorityAreas, setPriorityAreas] = useState<PriorityArea[]>([]);
+  const [showSummary, setShowSummary] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
 
   // Load survey questions from Excel
@@ -80,9 +86,22 @@ export default function Chat({ onClose }: ChatProps) {
           encoding: FileSystem.EncodingType.Base64,
         });
 
+        console.log('Successfully read file content, length:', fileContent.length);
+
         const workbook = XLSX.read(fileContent, { type: 'base64' });
+        console.log('Workbook sheets:', workbook.SheetNames);
+
         const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+        console.log('Worksheet data:', worksheet);
+
         const data = XLSX.utils.sheet_to_json(worksheet) as SurveyQuestion[];
+        console.log('Parsed survey data:', data);
+
+        if (!data || data.length === 0) {
+          console.error('No data found in Excel file');
+          return;
+        }
+
         setSurveyQuestions(data);
         console.log('Successfully loaded survey data:', data.length, 'questions');
       } catch (error) {
@@ -121,10 +140,18 @@ export default function Chat({ onClose }: ChatProps) {
       if (error) throw error;
 
       if (data) {
-        const history = data.map(msg => ({
-          role: msg.role as 'user' | 'assistant',
-          content: msg.content,
-        }));
+        console.log('Loading chat history:', data);
+        const history = data.map(msg => {
+          console.log('Processing message:', msg);
+          // Ensure we're using the correct role
+          const role = (msg.role as string) === 'assistant' ? 'model' : 'user';
+          console.log('Converted role:', role);
+          return {
+            role: role as 'user' | 'model',
+            content: msg.content,
+          };
+        });
+        console.log('Converted history:', history);
         setMessages(history);
       }
     } catch (error) {
@@ -161,16 +188,18 @@ export default function Chat({ onClose }: ChatProps) {
     const relevantQuestions = surveyQuestions
       .filter((_, index) => !usedQuestions.has(index))
       .filter(q => {
-        if (!q || !q.question) return false;
+        if (!q || typeof q.Question !== 'string') return false;
         
         const responseLower = (userResponse || '').toLowerCase();
-        const questionLower = q.question.toLowerCase();
+        const questionLower = q.Question.toLowerCase();
+        const priorityAreaLower = (typeof q['Priority Area'] === 'string' ? q['Priority Area'] : '').toLowerCase();
+        const typeLower = (typeof q.Type === 'string' ? q.Type : '').toLowerCase();
         
-        // Check if the question's category or content relates to the user's response
-        if (q.category && responseLower.includes(q.category.toLowerCase())) return true;
+        // Check if the question's priority area or type relates to the user's response
+        if (priorityAreaLower && responseLower.includes(priorityAreaLower)) return true;
+        if (typeLower && responseLower.includes(typeLower)) return true;
         if (questionLower.includes('alcohol') && responseLower.includes('drink')) return true;
         if (questionLower.includes('family') && (responseLower.includes('family') || responseLower.includes('wife') || responseLower.includes('husband'))) return true;
-        // Add more relevance checks as needed
         
         return false;
       });
@@ -180,19 +209,19 @@ export default function Chat({ onClose }: ChatProps) {
       const randomIndex = Math.floor(Math.random() * relevantQuestions.length);
       const questionIndex = surveyQuestions.indexOf(relevantQuestions[randomIndex]);
       usedQuestions.add(questionIndex);
-      return relevantQuestions[randomIndex].question;
+      return typeof relevantQuestions[randomIndex].Question === 'string' ? relevantQuestions[randomIndex].Question : '';
     }
 
     // If no relevant questions found, use a random unused question
     const unusedQuestions = surveyQuestions
       .filter((_, index) => !usedQuestions.has(index))
-      .filter(q => q && q.question); // Filter out any undefined or null questions
+      .filter(q => q && typeof q.Question === 'string');
     
     if (unusedQuestions.length > 0) {
       const randomIndex = Math.floor(Math.random() * unusedQuestions.length);
       const questionIndex = surveyQuestions.indexOf(unusedQuestions[randomIndex]);
       usedQuestions.add(questionIndex);
-      return unusedQuestions[randomIndex].question;
+      return typeof unusedQuestions[randomIndex].Question === 'string' ? unusedQuestions[randomIndex].Question : '';
     }
 
     console.log('No more unused questions available');
@@ -219,40 +248,111 @@ export default function Chat({ onClose }: ChatProps) {
       if (nextQuestion) {
         // Ask the next survey question
         const assistantMessage: Message = {
-          role: 'assistant',
+          role: 'model',
           content: nextQuestion,
         };
         setMessages(prev => [...prev, assistantMessage]);
         await saveMessage(assistantMessage);
       } else {
         // Switch to normal chat mode with context from survey
-        const chat = model.startChat({
-          history: [
-            {
-              role: 'user',
-              parts: [{ text: `You are an Alcoholics Anonymous (AA) counselor. Your role is to provide support, guidance, and encouragement to individuals struggling with alcohol addiction.
+        console.log('Survey Questions:', surveyQuestions);
+        
+        const surveyContext = surveyQuestions
+          .filter(q => q && q.Question)
+          .map(q => {
+            console.log('Processing question:', q);
+            return Object.entries(q)
+              .filter(([key, value]) => value !== null && value !== undefined && value !== '')
+              .map(([key, value]) => `${key}: ${value}`)
+              .join('\n');
+          })
+          .join('\n\n');
+
+        console.log('Survey Context being sent to Gemini:', surveyContext);
+        console.log('Current messages:', messages);
+
+        // Create a new array with properly typed roles
+        const mappedMessages = messages.map(msg => {
+          console.log('Mapping message:', msg);
+          const role = (msg.role as string) === 'assistant' ? 'model' : msg.role;
+          console.log('Mapped role:', role);
+          return {
+            role: role as 'user' | 'model',
+            parts: [{ text: msg.content }],
+          };
+        });
+
+        console.log('Mapped messages:', mappedMessages);
+
+        const chatHistory = [
+          {
+            role: 'user',
+            parts: [{ text: `You are an Alcoholics Anonymous (AA) counselor. Your role is to provide support, guidance, and encouragement to individuals struggling with alcohol addiction.
 You should respond with empathy, understanding, and non-judgmental advice. Your goal is to help the user reflect on their situation, consider the 12-step program,
 and provide resources or coping strategies when appropriate. Always maintain a supportive and compassionate tone.
 
-Keep responses to 100 words or less.` }]
-            },
-            {
-              role: 'model',
-              parts: [{ text: 'I understand. I will provide supportive, empathetic guidance as an AA counselor, keeping responses concise and focused on the 12-step program.' }]
-            },
-            ...messages.map(msg => ({
-              role: msg.role === 'assistant' ? 'model' : 'user',
-              parts: [{ text: msg.content }],
-            })),
-          ],
+Here is the complete survey data that has been collected:
+${surveyContext}
+
+IMPORTANT: For each response, you should:
+1. Track the user's answers for each Priority Area
+2. Score each Priority Area on a scale from 1-10 based on the severity of the issues discussed
+3. Consider multiple factors when scoring:
+   - Frequency of alcohol use
+   - Impact on relationships
+   - Physical health effects
+   - Mental health effects
+   - Work/social life impact
+   - Willingness to change
+4. Provide a brief explanation for each score
+5. Keep track of the scores for later use in an octopus graph visualization
+
+After analyzing all responses, provide a JSON array of PriorityArea objects in this format:
+{
+  "priorityAreas": [
+    {
+      "name": "Area Name",
+      "score": number (1-10),
+      "explanation": "Brief explanation of the score"
+    }
+  ]
+}
+
+Use this context to inform your responses, but maintain a natural conversation flow. Keep responses to 100 words or less.` }]
+          },
+          {
+            role: 'model',
+            parts: [{ text: 'I understand. I will provide supportive, empathetic guidance as an AA counselor, using the complete survey context to inform my responses while maintaining a natural conversation. I will also track and score responses for each Priority Area, providing explanations for the scores that will be used in the octopus graph visualization.' }]
+          },
+          ...mappedMessages,
+        ];
+
+        console.log('Final chat history:', chatHistory);
+
+        const chat = model.startChat({
+          history: chatHistory,
         });
 
         const result = await chat.sendMessage(inputText.trim());
         const response = await result.response;
         const text = response.text();
         
+        // Try to extract the JSON array from the response
+        try {
+          const jsonMatch = text.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const jsonData = JSON.parse(jsonMatch[0]);
+            if (jsonData.priorityAreas) {
+              setPriorityAreas(jsonData.priorityAreas);
+              setShowSummary(true);
+            }
+          }
+        } catch (e) {
+          console.error('Error parsing JSON from response:', e);
+        }
+        
         const assistantMessage: Message = {
-          role: 'assistant',
+          role: 'model',
           content: text,
         };
 
@@ -262,7 +362,7 @@ Keep responses to 100 words or less.` }]
     } catch (error) {
       console.error('Error sending message:', error);
       const errorMessage: Message = {
-        role: 'assistant',
+        role: 'model',
         content: 'Sorry, there was an error processing your message.',
       };
       setMessages(prev => [...prev, errorMessage]);
@@ -315,6 +415,11 @@ Keep responses to 100 words or less.` }]
           <View style={[styles.messageBubble, styles.assistantBubble]}>
             <ActivityIndicator size="small" color="#666" />
             <Text style={[styles.messageText, { marginLeft: 8 }]}>Thinking...</Text>
+          </View>
+        )}
+        {showSummary && priorityAreas.length > 0 && (
+          <View style={styles.summaryWrapper}>
+            <SummaryGraph priorityAreas={priorityAreas} />
           </View>
         )}
       </ScrollView>
@@ -429,5 +534,15 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
+  },
+  summaryWrapper: {
+    marginTop: 16,
+    marginBottom: 16,
+    ...Platform.select({
+      web: {
+        maxWidth: '100%',
+        overflow: 'hidden',
+      },
+    }),
   },
 }); 
