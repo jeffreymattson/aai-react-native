@@ -16,11 +16,18 @@ import { Ionicons } from '@expo/vector-icons';
 import * as XLSX from 'xlsx';
 import * as FileSystem from 'expo-file-system';
 import { Asset } from 'expo-asset';
+import { WebView } from 'react-native-webview';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import SummaryGraph from './SummaryGraph';
 
+console.log('SummaryGraph imported:', SummaryGraph);
+
 interface Message {
-  role: 'user' | 'model';
+  role: 'user' | 'assistant' | 'system' | 'model';
   content: string;
+  timestamp: Date;
+  type?: 'text' | 'summary';
+  priorityAreas?: PriorityArea[];
 }
 
 interface SurveyQuestion {
@@ -38,7 +45,14 @@ interface ChatProps {
 }
 
 export default function Chat({ onClose }: ChatProps) {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<Message[]>([
+    {
+      role: 'model',
+      content: 'Hello! I\'m here to help you with your recovery journey. To better understand your situation, I\'d like to ask you some questions about your experiences with alcohol. Would you be willing to answer a few questions?',
+      timestamp: new Date(),
+      type: 'text'
+    }
+  ]);
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
@@ -47,63 +61,112 @@ export default function Chat({ onClose }: ChatProps) {
   const [priorityAreas, setPriorityAreas] = useState<PriorityArea[]>([]);
   const [showSummary, setShowSummary] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
+  const [isSurveyComplete, setIsSurveyComplete] = useState(false);
+  const [answeredQuestions, setAnsweredQuestions] = useState<Set<number>>(new Set());
+
+  // Add logging for initial state
+  useEffect(() => {
+    console.log('Initial state - showSummary:', showSummary, 'priorityAreas:', priorityAreas, 'isSurveyComplete:', isSurveyComplete);
+  }, []);
+
+  // Add logging for state changes
+  useEffect(() => {
+    console.log('State changed - showSummary:', showSummary, 'priorityAreas:', priorityAreas, 'isSurveyComplete:', isSurveyComplete);
+  }, [showSummary, priorityAreas, isSurveyComplete]);
+
+  // Add logging for survey completion
+  useEffect(() => {
+    console.log('Survey completion check - answeredQuestions:', answeredQuestions.size, 'totalQuestions:', surveyQuestions.length);
+  }, [answeredQuestions, surveyQuestions]);
+
+  // Add logging for priority areas changes
+  useEffect(() => {
+    console.log('Priority areas updated:', priorityAreas);
+  }, [priorityAreas]);
+
+  // Add logging for showSummary changes
+  useEffect(() => {
+    console.log('showSummary changed:', showSummary);
+  }, [showSummary]);
 
   // Load survey questions from Excel
   useEffect(() => {
+    console.log('Starting to load survey data...');
     const loadSurveyData = async () => {
       try {
-        // Use the document directory path
-        const fileUri = `${FileSystem.documentDirectory}survey.xlsx`;
-        console.log('Attempting to load survey from:', fileUri);
+        if (Platform.OS === 'web') {
+          // For web, we'll use a direct fetch to get the Excel file
+          const response = await fetch('/survey.xlsx');
+          const arrayBuffer = await response.arrayBuffer();
+          const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+          console.log('Workbook sheets:', workbook.SheetNames);
 
-        // First, copy the file from assets to document directory if it doesn't exist
-        const fileInfo = await FileSystem.getInfoAsync(fileUri);
-        if (!fileInfo.exists) {
-          console.log('Survey file not found in document directory, copying from assets...');
-          
-          // Try to load the asset directly
-          const asset = Asset.fromModule(require('../assets/survey.xlsx'));
-          await asset.downloadAsync();
-          
-          if (!asset.localUri) {
-            console.error('Failed to load survey file from assets');
+          const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+          console.log('Worksheet data:', worksheet);
+
+          const data = XLSX.utils.sheet_to_json(worksheet) as SurveyQuestion[];
+          console.log('Parsed survey data:', data);
+
+          if (!data || data.length === 0) {
+            console.error('No data found in Excel file');
             return;
           }
+
+          setSurveyQuestions(data);
+          console.log('Successfully loaded survey data:', data.length, 'questions');
+        } else {
+          // For native platforms, use the existing file system approach
+          const fileUri = `${FileSystem.documentDirectory}survey.xlsx`;
+          console.log('Attempting to load survey from:', fileUri);
+
+          const fileInfo = await FileSystem.getInfoAsync(fileUri);
+          console.log('File info:', fileInfo);
           
-          console.log('Found survey file at:', asset.localUri);
-          
-          // Copy the file from the asset to the document directory
-          await FileSystem.copyAsync({
-            from: asset.localUri,
-            to: fileUri
+          if (!fileInfo.exists) {
+            console.log('Survey file not found in document directory, copying from assets...');
+            
+            const asset = Asset.fromModule(require('../assets/survey.xlsx'));
+            console.log('Asset loaded:', asset);
+            await asset.downloadAsync();
+            
+            if (!asset.localUri) {
+              console.error('Failed to load survey file from assets');
+              return;
+            }
+            
+            console.log('Found survey file at:', asset.localUri);
+            
+            await FileSystem.copyAsync({
+              from: asset.localUri,
+              to: fileUri
+            });
+            
+            console.log('Successfully copied survey file to:', fileUri);
+          }
+
+          const fileContent = await FileSystem.readAsStringAsync(fileUri, {
+            encoding: FileSystem.EncodingType.Base64,
           });
-          
-          console.log('Successfully copied survey file to:', fileUri);
+
+          console.log('Successfully read file content, length:', fileContent.length);
+
+          const workbook = XLSX.read(fileContent, { type: 'base64' });
+          console.log('Workbook sheets:', workbook.SheetNames);
+
+          const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+          console.log('Worksheet data:', worksheet);
+
+          const data = XLSX.utils.sheet_to_json(worksheet) as SurveyQuestion[];
+          console.log('Parsed survey data:', data);
+
+          if (!data || data.length === 0) {
+            console.error('No data found in Excel file');
+            return;
+          }
+
+          setSurveyQuestions(data);
+          console.log('Successfully loaded survey data:', data.length, 'questions');
         }
-
-        // Read the file content
-        const fileContent = await FileSystem.readAsStringAsync(fileUri, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-
-        console.log('Successfully read file content, length:', fileContent.length);
-
-        const workbook = XLSX.read(fileContent, { type: 'base64' });
-        console.log('Workbook sheets:', workbook.SheetNames);
-
-        const worksheet = workbook.Sheets[workbook.SheetNames[0]];
-        console.log('Worksheet data:', worksheet);
-
-        const data = XLSX.utils.sheet_to_json(worksheet) as SurveyQuestion[];
-        console.log('Parsed survey data:', data);
-
-        if (!data || data.length === 0) {
-          console.error('No data found in Excel file');
-          return;
-        }
-
-        setSurveyQuestions(data);
-        console.log('Successfully loaded survey data:', data.length, 'questions');
       } catch (error) {
         console.error('Error loading survey data:', error);
       }
@@ -111,6 +174,24 @@ export default function Chat({ onClose }: ChatProps) {
 
     loadSurveyData();
   }, []);
+
+  // Add logging for survey context
+  useEffect(() => {
+    console.log('Current survey questions:', surveyQuestions);
+    if (surveyQuestions.length > 0) {
+      const context = surveyQuestions
+        .filter(q => q && q.Question)
+        .map(q => {
+          console.log('Processing question:', q);
+          return Object.entries(q)
+            .filter(([key, value]) => value !== null && value !== undefined && value !== '')
+            .map(([key, value]) => `${key}: ${value}`)
+            .join('\n');
+        })
+        .join('\n\n');
+      console.log('Generated survey context:', context);
+    }
+  }, [surveyQuestions]);
 
   // Initialize the Gemini model
   const genAI = new GoogleGenerativeAI('AIzaSyAd4oo7qJgo2lsr80p6B0zymVNvBuygAT4');
@@ -143,12 +224,14 @@ export default function Chat({ onClose }: ChatProps) {
         console.log('Loading chat history:', data);
         const history = data.map(msg => {
           console.log('Processing message:', msg);
-          // Ensure we're using the correct role
-          const role = (msg.role as string) === 'assistant' ? 'model' : 'user';
+          // Keep 'model' role as is, only convert 'assistant' to 'model'
+          const role = (msg.role as string) === 'assistant' ? 'model' : msg.role;
           console.log('Converted role:', role);
           return {
             role: role as 'user' | 'model',
             content: msg.content,
+            timestamp: new Date(msg.created_at),
+            type: 'text' as const
           };
         });
         console.log('Converted history:', history);
@@ -228,18 +311,115 @@ export default function Chat({ onClose }: ChatProps) {
     return '';
   };
 
+  // Add function to save priority areas
+  const savePriorityAreas = async (areas: PriorityArea[]) => {
+    if (!userId) {
+      console.log('Cannot save priority areas: no userId');
+      return;
+    }
+    
+    console.log('Attempting to save priority areas:', JSON.stringify(areas, null, 2));
+    try {
+      const { data, error } = await supabase
+        .from('priority_areas')
+        .upsert({
+          user_id: userId,
+          areas: areas,
+          created_at: new Date().toISOString()
+        })
+        .select();
+
+      if (error) {
+        console.error('Error saving priority areas:', error);
+        throw error;
+      }
+      
+      console.log('Successfully saved priority areas:', JSON.stringify(data, null, 2));
+      
+      // Verify the save by immediately loading
+      const { data: verifyData, error: verifyError } = await supabase
+        .from('priority_areas')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      if (verifyError) {
+        console.error('Error verifying saved priority areas:', verifyError);
+      } else {
+        console.log('Verified saved priority areas:', JSON.stringify(verifyData, null, 2));
+      }
+    } catch (error) {
+      console.error('Error in savePriorityAreas:', error);
+    }
+  };
+
+  // Add function to load priority areas
+  const loadPriorityAreas = async () => {
+    if (!userId) {
+      console.log('Cannot load priority areas: no userId');
+      return;
+    }
+    
+    console.log('Attempting to load priority areas for user:', userId);
+    try {
+      const { data, error } = await supabase
+        .from('priority_areas')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      if (error) {
+        console.error('Error loading priority areas:', error);
+        throw error;
+      }
+
+      console.log('Loaded priority areas data:', JSON.stringify(data, null, 2));
+      
+      if (data && data.length > 0) {
+        console.log('Setting priority areas from database:', JSON.stringify(data[0].areas, null, 2));
+        setPriorityAreas(data[0].areas);
+        setShowSummary(true);
+      } else {
+        console.log('No priority areas found in database');
+      }
+    } catch (error) {
+      console.error('Error in loadPriorityAreas:', error);
+    }
+  };
+
+  // Load priority areas on component mount and when userId changes
+  useEffect(() => {
+    console.log('Component mounted or userId changed, loading priority areas');
+    console.log('Current userId:', userId);
+    loadPriorityAreas();
+  }, [userId]);
+
+  // Add this function to check if survey is complete
+  const checkSurveyCompletion = () => {
+    const allQuestionsAnswered = surveyQuestions.length > 0 && answeredQuestions.size === surveyQuestions.length;
+    setIsSurveyComplete(allQuestionsAnswered);
+    return allQuestionsAnswered;
+  };
+
   const handleSend = async () => {
-    if (inputText.trim() === '' || !userId) return;
+    if (isLoading || inputText.trim() === '') return;
 
     const userMessage: Message = {
       role: 'user',
       content: inputText.trim(),
+      timestamp: new Date(),
+      type: 'text'
     };
 
+    // Update state first
     setMessages(prev => [...prev, userMessage]);
-    await saveMessage(userMessage);
     setInputText('');
     setIsLoading(true);
+
+    // Then save the message
+    await saveMessage(userMessage);
 
     try {
       // Get next question based on user's response
@@ -250,9 +430,20 @@ export default function Chat({ onClose }: ChatProps) {
         const assistantMessage: Message = {
           role: 'model',
           content: nextQuestion,
+          timestamp: new Date(),
+          type: 'text'
         };
         setMessages(prev => [...prev, assistantMessage]);
         await saveMessage(assistantMessage);
+        
+        // Mark the question as answered
+        const questionIndex = surveyQuestions.findIndex(q => q.Question === nextQuestion);
+        if (questionIndex !== -1) {
+          setAnsweredQuestions(prev => new Set([...prev, questionIndex]));
+        }
+        
+        // Check if survey is complete
+        checkSurveyCompletion();
       } else {
         // Switch to normal chat mode with context from survey
         console.log('Survey Questions:', surveyQuestions);
@@ -261,10 +452,12 @@ export default function Chat({ onClose }: ChatProps) {
           .filter(q => q && q.Question)
           .map(q => {
             console.log('Processing question:', q);
-            return Object.entries(q)
+            const formattedQuestion = Object.entries(q)
               .filter(([key, value]) => value !== null && value !== undefined && value !== '')
               .map(([key, value]) => `${key}: ${value}`)
               .join('\n');
+            console.log('Formatted question:', formattedQuestion);
+            return formattedQuestion;
           })
           .join('\n\n');
 
@@ -274,7 +467,8 @@ export default function Chat({ onClose }: ChatProps) {
         // Create a new array with properly typed roles
         const mappedMessages = messages.map(msg => {
           console.log('Mapping message:', msg);
-          const role = (msg.role as string) === 'assistant' ? 'model' : msg.role;
+          // Convert 'assistant' role to 'model' for Gemini API
+          const role = msg.role === 'assistant' ? 'model' : msg.role;
           console.log('Mapped role:', role);
           return {
             role: role as 'user' | 'model',
@@ -291,7 +485,10 @@ export default function Chat({ onClose }: ChatProps) {
 You should respond with empathy, understanding, and non-judgmental advice. Your goal is to help the user reflect on their situation, consider the 12-step program,
 and provide resources or coping strategies when appropriate. Always maintain a supportive and compassionate tone.
 
-Here is the complete survey data that has been collected:
+IMPORTANT: Start by asking survey questions from the provided list. Only proceed to general counseling after all survey questions have been asked and answered.
+If the user agrees to answer questions, begin with the first survey question. If they decline, respond empathetically and offer to help in other ways.
+
+Here are the survey questions you should use:
 ${surveyContext}
 
 IMPORTANT: For each response, you should:
@@ -307,7 +504,10 @@ IMPORTANT: For each response, you should:
 4. Provide a brief explanation for each score
 5. Keep track of the scores for later use in an octopus graph visualization
 
-After analyzing all responses, provide a JSON array of PriorityArea objects in this format:
+After analyzing all responses, provide your response in this format:
+[Your human-readable response here]
+
+<!--JSON_START-->
 {
   "priorityAreas": [
     {
@@ -317,12 +517,13 @@ After analyzing all responses, provide a JSON array of PriorityArea objects in t
     }
   ]
 }
+<!--JSON_END-->
 
 Use this context to inform your responses, but maintain a natural conversation flow. Keep responses to 100 words or less.` }]
           },
           {
             role: 'model',
-            parts: [{ text: 'I understand. I will provide supportive, empathetic guidance as an AA counselor, using the complete survey context to inform my responses while maintaining a natural conversation. I will also track and score responses for each Priority Area, providing explanations for the scores that will be used in the octopus graph visualization.' }]
+            parts: [{ text: 'I understand. I will start by asking survey questions to better understand the user\'s situation. I will maintain a supportive and empathetic tone throughout the conversation, and only proceed to general counseling after all survey questions have been asked and answered.' }]
           },
           ...mappedMessages,
         ];
@@ -339,31 +540,86 @@ Use this context to inform your responses, but maintain a natural conversation f
         
         // Try to extract the JSON array from the response
         try {
-          const jsonMatch = text.match(/\{[\s\S]*\}/);
-          if (jsonMatch) {
-            const jsonData = JSON.parse(jsonMatch[0]);
-            if (jsonData.priorityAreas) {
+          const jsonMatch = text.match(/<!--JSON_START-->([\s\S]*?)<!--JSON_END-->/);
+          console.log('Found JSON match:', jsonMatch);
+          console.log('Survey completion status:', isSurveyComplete);
+          if (jsonMatch && isSurveyComplete) {  // Only process JSON if survey is complete
+            const jsonStr = jsonMatch[1].trim().replace(/\n\s+/g, ' ');  // Remove extra whitespace and newlines
+            console.log('Cleaned JSON string to parse:', jsonStr);
+            const jsonData = JSON.parse(jsonStr);
+            console.log('Parsed JSON data:', jsonData);
+            if (jsonData.priorityAreas && Array.isArray(jsonData.priorityAreas)) {
+              console.log('Setting priority areas:', jsonData.priorityAreas);
               setPriorityAreas(jsonData.priorityAreas);
+              await savePriorityAreas(jsonData.priorityAreas);
+              
+              // Add summary message to messages array
+              const summaryMessage: Message = {
+                role: 'model',
+                content: 'Priority Areas Summary',
+                timestamp: new Date(),
+                type: 'summary',
+                priorityAreas: jsonData.priorityAreas
+              };
+              
+              // Extract the human-readable part of the response
+              const humanReadableResponse = text.split('<!--JSON_START-->')[0].trim();
+              
+              const modelResponse: Message = {
+                role: 'model',
+                content: humanReadableResponse,
+                timestamp: new Date(),
+                type: 'text'
+              };
+              
+              setMessages(prev => [...prev, modelResponse, summaryMessage]);
+              await saveMessage(modelResponse);
+              await saveMessage(summaryMessage);
+              
+              console.log('Setting showSummary to true');
               setShowSummary(true);
+            } else {
+              console.log('No priority areas found in JSON data or invalid format:', jsonData);
+              const modelResponse: Message = {
+                role: 'model',
+                content: text,
+                timestamp: new Date(),
+                type: 'text'
+              };
+              setMessages(prev => [...prev, modelResponse]);
+              await saveMessage(modelResponse);
             }
+          } else {
+            console.log('No JSON match found or survey not complete');
+            const modelResponse: Message = {
+              role: 'model',
+              content: text,
+              timestamp: new Date(),
+              type: 'text'
+            };
+            setMessages(prev => [...prev, modelResponse]);
+            await saveMessage(modelResponse);
           }
         } catch (e) {
           console.error('Error parsing JSON from response:', e);
+          console.error('Response text:', text);
+          const errorMessage: Message = {
+            role: 'model',
+            content: text,
+            timestamp: new Date(),
+            type: 'text'
+          };
+          setMessages(prev => [...prev, errorMessage]);
+          await saveMessage(errorMessage);
         }
-        
-        const assistantMessage: Message = {
-          role: 'model',
-          content: text,
-        };
-
-        setMessages(prev => [...prev, assistantMessage]);
-        await saveMessage(assistantMessage);
       }
     } catch (error) {
       console.error('Error sending message:', error);
       const errorMessage: Message = {
         role: 'model',
         content: 'Sorry, there was an error processing your message.',
+        timestamp: new Date(),
+        type: 'text'
       };
       setMessages(prev => [...prev, errorMessage]);
       await saveMessage(errorMessage);
@@ -372,11 +628,214 @@ Use this context to inform your responses, but maintain a natural conversation f
     }
   };
 
-  useEffect(() => {
+  const scrollToBottom = () => {
     if (scrollViewRef.current) {
-      scrollViewRef.current.scrollToEnd({ animated: true });
+      // Use requestAnimationFrame to ensure the scroll happens after content is rendered
+      requestAnimationFrame(() => {
+        if (scrollViewRef.current) {
+          scrollViewRef.current.scrollToEnd({ animated: true });
+        }
+      });
     }
+  };
+
+  // Add effect to scroll to bottom when messages change
+  useEffect(() => {
+    const scrollToBottom = () => {
+      if (scrollViewRef.current) {
+        // Use requestAnimationFrame to ensure the scroll happens after content is rendered
+        requestAnimationFrame(() => {
+          if (scrollViewRef.current) {
+            scrollViewRef.current.scrollToEnd({ animated: true });
+          }
+        });
+      }
+    };
+
+    // Initial scroll
+    scrollToBottom();
+
+    // Add a small delay to ensure content is rendered
+    const timer = setTimeout(scrollToBottom, 100);
+
+    return () => clearTimeout(timer);
   }, [messages]);
+
+  const handleKeyPress = (e: any) => {
+    if (Platform.OS === 'web') {
+      // On web, check if it's Enter without Shift
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        handleSend();
+      }
+    }
+  };
+
+  // Add function to get unique priority areas from survey
+  const getUniquePriorityAreas = () => {
+    if (!surveyQuestions || surveyQuestions.length === 0) {
+      console.log('No survey questions available');
+      return [];
+    }
+
+    // Get unique priority areas from the survey
+    const uniqueAreas = new Set<string>();
+    surveyQuestions.forEach(q => {
+      if (q['Priority Area']) {
+        uniqueAreas.add(q['Priority Area'] as string);
+      }
+    });
+
+    console.log('Unique priority areas from survey:', Array.from(uniqueAreas));
+    return Array.from(uniqueAreas);
+  };
+
+  const requestPriorityAreas = async () => {
+    try {
+      console.log('Current priority areas before loading:', priorityAreas);
+      
+      // First try to load existing priority areas from the database
+      await loadPriorityAreas();
+      
+      console.log('Priority areas after loading:', priorityAreas);
+      
+      // If we have priority areas, no need to request from Gemini
+      if (priorityAreas.length > 0) {
+        console.log('Using existing priority areas from database');
+        return;
+      }
+
+      // Get unique priority areas from survey
+      const surveyPriorityAreas = getUniquePriorityAreas();
+      if (surveyPriorityAreas.length === 0) {
+        console.error('No priority areas found in survey data');
+        return;
+      }
+
+      // If no existing areas found, request from Gemini with survey context
+      const chat = model.startChat({
+        history: [
+          {
+            role: 'user',
+            parts: [{ text: `Based on the following survey responses, please provide scores for each of these priority areas in this exact format, with no additional text or markdown:
+
+Priority Areas to Score:
+${surveyPriorityAreas.map(area => `- ${area}`).join('\n')}
+
+Survey Context:
+${messages
+  .filter(msg => msg.role === 'user')
+  .map(msg => msg.content)
+  .join('\n')}
+
+Format the response as:
+{
+  "priorityAreas": [
+    {
+      "name": "Area Name",
+      "score": number (1-10),
+      "explanation": "REQUIRED: Provide a detailed explanation (minimum 5-6 sentences) that MUST include:
+        1. Direct quotes from the user's responses that specifically relate to this area
+        2. Analysis of how these responses indicate the severity of issues
+        3. Comparison to other areas in terms of urgency and impact
+        4. Specific examples of behaviors or situations mentioned
+        5. Patterns or trends observed across multiple responses
+        6. Detailed reasoning for the specific numerical score
+        7. How this area affects other aspects of the user's life
+        8. Potential implications if this area is not addressed
+        
+        The explanation must be thorough and detailed, with specific references to the user's responses. Each point should be supported by direct quotes or specific examples from the conversation."
+    }
+  ]
+}
+
+Consider the following when scoring:
+1. Frequency of alcohol use
+2. Impact on relationships
+3. Physical health effects
+4. Mental health effects
+5. Work/social life impact
+6. Willingness to change
+
+IMPORTANT: For each priority area, you MUST:
+- Write a minimum of 5-6 sentences
+- Include direct quotes from the user's responses
+- Provide specific examples and details
+- Explain the reasoning behind the score
+- Compare to other areas
+- Analyze patterns and trends
+- Discuss implications and impact
+
+The explanation should be comprehensive and detailed, not just a brief sentence. Each point must be supported by specific evidence from the user's responses.` }]
+          }
+        ],
+      });
+
+      const result = await chat.sendMessage('');
+      const response = await result.response;
+      const text = response.text();
+      
+      console.log('Raw response:', text);
+      
+      // Try to extract the JSON array from the response
+      try {
+        // First try to find JSON between markers
+        let jsonMatch = text.match(/<!--JSON_START-->([\s\S]*?)<!--JSON_END-->/);
+        
+        // If no markers found, try to find JSON directly
+        if (!jsonMatch) {
+          jsonMatch = text.match(/\{[\s\S]*\}/);
+        }
+        
+        console.log('Found JSON match:', jsonMatch);
+        
+        if (jsonMatch) {
+          let jsonStr = jsonMatch[0];
+          
+          // Clean up the string
+          jsonStr = jsonStr
+            .replace(/<!--JSON_START-->/, '')
+            .replace(/<!--JSON_END-->/, '')
+            .replace(/```json\n?/g, '')
+            .replace(/```\n?/g, '')
+            .trim();
+          
+          console.log('Cleaned JSON string to parse:', jsonStr);
+          
+          // Try to parse the JSON
+          const jsonData = JSON.parse(jsonStr);
+          console.log('Parsed JSON data:', jsonData);
+          
+          if (jsonData.priorityAreas && Array.isArray(jsonData.priorityAreas)) {
+            // Verify that all priority areas from survey are included
+            const missingAreas = surveyPriorityAreas.filter(
+              area => !jsonData.priorityAreas.some((pa: PriorityArea) => pa.name === area)
+            );
+            
+            if (missingAreas.length > 0) {
+              console.error('Missing priority areas in response:', missingAreas);
+              return;
+            }
+            
+            console.log('Setting priority areas:', jsonData.priorityAreas);
+            setPriorityAreas(jsonData.priorityAreas);
+            await savePriorityAreas(jsonData.priorityAreas);
+            setShowSummary(true);
+          } else {
+            console.error('Invalid priority areas format:', jsonData);
+          }
+        } else {
+          console.error('No JSON found in response');
+          console.error('Full response:', text);
+        }
+      } catch (e) {
+        console.error('Error parsing JSON from response:', e);
+        console.error('Response text:', text);
+      }
+    } catch (error) {
+      console.error('Error requesting priority areas:', error);
+    }
+  };
 
   return (
     <KeyboardAvoidingView
@@ -389,37 +848,43 @@ Use this context to inform your responses, but maintain a natural conversation f
           <Ionicons name="close" size={24} color="#007AFF" />
         </TouchableOpacity>
       </View>
-
+      
       <ScrollView
         ref={scrollViewRef}
         style={styles.messagesContainer}
         contentContainerStyle={styles.messagesContent}
+        onContentSizeChange={scrollToBottom}
+        onLayout={scrollToBottom}
       >
         {messages.map((message, index) => (
           <View
             key={index}
             style={[
-              styles.messageBubble,
-              message.role === 'user' ? styles.userBubble : styles.assistantBubble,
+              styles.messageContainer,
+              message.role === 'user' ? styles.userMessage : styles.assistantMessage,
             ]}
           >
-            <Text style={[
-              styles.messageText,
-              message.role === 'user' ? styles.userText : styles.assistantText,
-            ]}>
-              {message.content}
-            </Text>
+            {message.type === 'summary' && message.priorityAreas ? (
+              <View style={styles.summaryWrapper}>
+                <SummaryGraph priorityAreas={message.priorityAreas} />
+              </View>
+            ) : (
+              <Text style={styles.messageText}>
+                {message.content.split('<!--JSON_START-->')[0].trim()}
+              </Text>
+            )}
           </View>
         ))}
         {isLoading && (
-          <View style={[styles.messageBubble, styles.assistantBubble]}>
-            <ActivityIndicator size="small" color="#666" />
-            <Text style={[styles.messageText, { marginLeft: 8 }]}>Thinking...</Text>
+          <View style={[styles.messageContainer, styles.assistantMessage]}>
+            <Text style={styles.messageText}>Thinking...</Text>
           </View>
         )}
         {showSummary && priorityAreas.length > 0 && (
-          <View style={styles.summaryWrapper}>
-            <SummaryGraph priorityAreas={priorityAreas} />
+          <View style={[styles.messageContainer, styles.assistantMessage]}>
+            <View style={styles.summaryWrapper}>
+              <SummaryGraph priorityAreas={priorityAreas} />
+            </View>
           </View>
         )}
       </ScrollView>
@@ -433,6 +898,8 @@ Use this context to inform your responses, but maintain a natural conversation f
           placeholderTextColor="#666"
           multiline
           maxLength={500}
+          onKeyPress={handleKeyPress}
+          onSubmitEditing={Platform.OS !== 'web' ? handleSend : undefined}
         />
         <TouchableOpacity
           style={[
@@ -445,6 +912,12 @@ Use this context to inform your responses, but maintain a natural conversation f
           <Text style={styles.sendButtonText}>Send</Text>
         </TouchableOpacity>
       </View>
+      <TouchableOpacity
+        style={styles.requestButton}
+        onPress={requestPriorityAreas}
+      >
+        <Text style={styles.requestButtonText}>Show Priority Areas</Text>
+      </TouchableOpacity>
     </KeyboardAvoidingView>
   );
 }
@@ -473,35 +946,30 @@ const styles = StyleSheet.create({
   },
   messagesContainer: {
     flex: 1,
-  },
-  messagesContent: {
     padding: 16,
   },
-  messageBubble: {
-    maxWidth: '80%',
-    padding: 12,
-    borderRadius: 20,
-    marginBottom: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
+  messagesContent: {
+    paddingBottom: 16,
   },
-  userBubble: {
+  messageContainer: {
+    maxWidth: '80%',
+    marginBottom: 8,
+    padding: 12,
+    borderRadius: 16,
+  },
+  userMessage: {
     alignSelf: 'flex-end',
     backgroundColor: '#007AFF',
+    marginLeft: '20%',
   },
-  assistantBubble: {
+  assistantMessage: {
     alignSelf: 'flex-start',
-    backgroundColor: '#E9E9EB',
+    backgroundColor: '#f0f0f0',
+    marginRight: '20%',
   },
   messageText: {
     fontSize: 16,
-    lineHeight: 20,
-  },
-  userText: {
-    color: '#fff',
-  },
-  assistantText: {
-    color: '#000',
+    lineHeight: 24,
   },
   inputContainer: {
     flexDirection: 'row',
@@ -536,13 +1004,19 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   summaryWrapper: {
-    marginTop: 16,
-    marginBottom: 16,
-    ...Platform.select({
-      web: {
-        maxWidth: '100%',
-        overflow: 'hidden',
-      },
-    }),
+    width: '100%',
+    marginVertical: 16,
+  },
+  requestButton: {
+    backgroundColor: '#007AFF',
+    padding: 12,
+    borderRadius: 8,
+    margin: 8,
+    alignItems: 'center',
+  },
+  requestButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
   },
 }); 
