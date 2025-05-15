@@ -7,20 +7,26 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
-    "platforms": ["ios", "android", "web"],
+    "platforms": [
+      "ios",
+      "android",
+      "web"
+    ],
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.jmattson.aai"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
-      }
+      },
+      "package": "com.jmattson.aai"
     },
     "web": {
       "favicon": "./assets/favicon.png",
@@ -29,6 +35,11 @@
     "assetBundlePatterns": [
       "**/*",
       "assets/*"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "8d6d0d8d-8626-43d5-9fd3-7d93b107f6cd"
+      }
+    }
   }
 }

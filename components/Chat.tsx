@@ -224,8 +224,8 @@ export default function Chat({ onClose }: ChatProps) {
         console.log('Loading chat history:', data);
         const history = data.map(msg => {
           console.log('Processing message:', msg);
-          // Keep 'model' role as is, only convert 'assistant' to 'model'
-          const role = (msg.role as string) === 'assistant' ? 'model' : msg.role;
+          // Convert 'assistant' to 'model', but keep 'model' as is
+          const role = msg.role === 'assistant' ? 'model' : msg.role;
           console.log('Converted role:', role);
           return {
             role: role as 'user' | 'model',
