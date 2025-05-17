@@ -29,7 +29,7 @@ export default function SignUp({ onNavigateToSignIn }: SignUpProps) {
       email: email,
       password: password,
       options: {
-        emailRedirectTo: 'https://yourdomain.com/verify-email'
+        emailRedirectTo: 'http://3.20.51.149/confirm-email'
       }
     })
 

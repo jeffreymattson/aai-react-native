@@ -61,7 +61,7 @@ export default function SignIn({ onNavigateToSignUp }: SignInProps) {
     setLoading(true)
     setErrorMessage('')
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: 'http://localhost:3000/reset-password'
+      redirectTo: 'http://3.20.51.149/reset-password'
     })
 
     if (error) {
