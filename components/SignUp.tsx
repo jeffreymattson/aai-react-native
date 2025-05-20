@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Alert, StyleSheet, View, Text, TouchableOpacity } from 'react-native'
+import { StyleSheet, View, Text, TouchableOpacity } from 'react-native'
 import { supabase } from '../lib/supabase'
 import { Button, Input } from '@rneui/themed'
 
@@ -12,19 +12,21 @@ export default function SignUp({ onNavigateToSignIn }: SignUpProps) {
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [loading, setLoading] = useState(false)
+  const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
 
   async function signUpWithEmail() {
     if (password !== confirmPassword) {
-      Alert.alert('Error', 'Passwords do not match')
+      setMessage({ text: 'Passwords do not match', type: 'error' })
       return
     }
 
     if (password.length < 6) {
-      Alert.alert('Error', 'Password must be at least 6 characters long')
+      setMessage({ text: 'Password must be at least 6 characters long', type: 'error' })
       return
     }
 
     setLoading(true)
+    setMessage(null)
     const { error } = await supabase.auth.signUp({
       email: email,
       password: password,
@@ -34,29 +36,42 @@ export default function SignUp({ onNavigateToSignIn }: SignUpProps) {
     })
 
     if (error) {
-      Alert.alert(error.message)
+      setMessage({ text: error.message, type: 'error' })
     } else {
-      Alert.alert(
-        'Registration Successful!',
-        `We've sent a confirmation email to ${email}. Please check your inbox and click the verification link to complete your registration.`,
-        [
-          {
-            text: 'OK',
-            onPress: () => onNavigateToSignIn()
-          }
-        ]
-      )
+      setMessage({ 
+        text: `We've sent a confirmation email to ${email}. Please check your inbox and click the verification link to complete your registration.`, 
+        type: 'success' 
+      })
+      // Clear the form
+      setEmail('')
+      setPassword('')
+      setConfirmPassword('')
+      // Navigate to sign in after 5 seconds
+      setTimeout(() => {
+        onNavigateToSignIn()
+      }, 5000)
     }
     setLoading(false)
   }
 
   return (
     <View>
+      {message && (
+        <View style={[
+          styles.messageContainer,
+          message.type === 'success' ? styles.successMessage : styles.errorMessage
+        ]}>
+          <Text style={styles.messageText}>{message.text}</Text>
+        </View>
+      )}
       <View style={[styles.verticallySpaced, styles.mt20]}>
         <Input
           label="Email"
           leftIcon={{ type: 'font-awesome', name: 'envelope' }}
-          onChangeText={(text) => setEmail(text)}
+          onChangeText={(text) => {
+            setEmail(text)
+            setMessage(null)
+          }}
           value={email}
           placeholder="email@address.com"
           autoCapitalize={'none'}
@@ -66,7 +81,10 @@ export default function SignUp({ onNavigateToSignIn }: SignUpProps) {
         <Input
           label="Password"
           leftIcon={{ type: 'font-awesome', name: 'lock' }}
-          onChangeText={(text) => setPassword(text)}
+          onChangeText={(text) => {
+            setPassword(text)
+            setMessage(null)
+          }}
           value={password}
           secureTextEntry={true}
           placeholder="Password"
@@ -77,7 +95,10 @@ export default function SignUp({ onNavigateToSignIn }: SignUpProps) {
         <Input
           label="Confirm Password"
           leftIcon={{ type: 'font-awesome', name: 'lock' }}
-          onChangeText={(text) => setConfirmPassword(text)}
+          onChangeText={(text) => {
+            setConfirmPassword(text)
+            setMessage(null)
+          }}
           value={confirmPassword}
           secureTextEntry={true}
           placeholder="Confirm Password"
@@ -117,5 +138,23 @@ const styles = StyleSheet.create({
   linkText: {
     color: '#2089dc',
     fontSize: 14,
+  },
+  messageContainer: {
+    padding: 15,
+    borderRadius: 5,
+    marginBottom: 20,
+  },
+  successMessage: {
+    backgroundColor: '#d4edda',
+    borderColor: '#c3e6cb',
+  },
+  errorMessage: {
+    backgroundColor: '#f8d7da',
+    borderColor: '#f5c6cb',
+  },
+  messageText: {
+    fontSize: 14,
+    textAlign: 'center',
+    color: '#155724',
   },
 }) 
