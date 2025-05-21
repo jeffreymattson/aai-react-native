@@ -1,15 +1,12 @@
-const { getDefaultConfig } = require('expo/metro-config');
+const { getDefaultConfig } = require('@expo/metro-config');
 
-module.exports = (() => {
-  const config = getDefaultConfig(__dirname);
+const config = getDefaultConfig(__dirname);
 
-  const { assetExts, sourceExts } = config.resolver;
+// Add custom configuration
+config.resolver.sourceExts = [...config.resolver.sourceExts, 'jsx', 'js', 'ts', 'tsx'];
+config.resolver.assetExts = [...config.resolver.assetExts, 'xlsx'];
 
-  return {
-    ...config,
-    resolver: {
-      ...config.resolver,
-      assetExts: [...assetExts, 'xlsx'],
-    },
-  };
-})(); 
+// Ensure proper handling of web-specific files
+config.resolver.platforms = ['web', 'ios', 'android'];
+
+module.exports = config; 
