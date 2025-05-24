@@ -1,14 +1,7 @@
 module.exports = function (api) {
   api.cache(true);
   return {
-    presets: [
-      ['babel-preset-expo', { jsxRuntime: 'automatic' }]
-    ],
-    env: {
-      production: {
-        plugins: ['react-native-paper/babel'],
-      },
-    },
+    presets: ['babel-preset-expo'],
     plugins: [
       [
         'module:react-native-dotenv',
@@ -20,8 +13,7 @@ module.exports = function (api) {
           safe: false,
           allowUndefined: true,
         },
-      ],
-      ['@babel/plugin-transform-react-jsx', { runtime: 'automatic' }]
+      ]
     ],
   };
 }; 

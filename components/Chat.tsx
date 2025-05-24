@@ -9,6 +9,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { supabase } from '../lib/supabase';
@@ -19,6 +20,8 @@ import { Asset } from 'expo-asset';
 import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import SummaryGraph from './SummaryGraph';
+import { Audio } from 'expo-av';
+import Voice, { SpeechResultsEvent, SpeechErrorEvent } from '@react-native-community/voice';
 
 console.log('SummaryGraph imported:', SummaryGraph);
 
@@ -44,6 +47,15 @@ interface ChatProps {
   onClose: () => void;
 }
 
+interface SpeechResult {
+  value: string;
+  isDone: boolean;
+}
+
+interface SpeechError {
+  message: string;
+}
+
 export default function Chat({ onClose }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -63,6 +75,10 @@ export default function Chat({ onClose }: ChatProps) {
   const scrollViewRef = useRef<ScrollView>(null);
   const [isSurveyComplete, setIsSurveyComplete] = useState(false);
   const [answeredQuestions, setAnsweredQuestions] = useState<Set<number>>(new Set());
+  const [isRecording, setIsRecording] = useState(false);
+  const [hasPermission, setHasPermission] = useState<boolean | null>(null);
+  const [recording, setRecording] = useState<Audio.Recording | null>(null);
+  const recognitionRef = useRef<any>(null);
 
   // Add logging for initial state
   useEffect(() => {
@@ -837,18 +853,61 @@ The explanation should be comprehensive and detailed, not just a brief sentence.
     }
   };
 
+  useEffect(() => {
+    // Initialize Voice
+    Voice.onSpeechStart = () => setIsRecording(true);
+    Voice.onSpeechEnd = () => setIsRecording(false);
+    Voice.onSpeechResults = onSpeechResults;
+    Voice.onSpeechError = onSpeechError;
+
+    return () => {
+      // Cleanup
+      Voice.destroy().then(Voice.removeAllListeners);
+    };
+  }, []);
+
+  const onSpeechResults = (e: SpeechResultsEvent) => {
+    if (e.value && e.value[0]) {
+      setInputText(e.value[0]);
+    }
+  };
+
+  const onSpeechError = (e: SpeechErrorEvent) => {
+    console.error('Speech recognition error:', e);
+    setIsRecording(false);
+    Alert.alert('Error', 'Failed to recognize speech. Please try again.');
+  };
+
+  const startRecording = async () => {
+    try {
+      await Voice.start('en-US');
+    } catch (error) {
+      console.error('Error starting speech recognition:', error);
+      Alert.alert('Error', 'Failed to start speech recognition');
+    }
+  };
+
+  const stopRecording = async () => {
+    try {
+      await Voice.stop();
+    } catch (error) {
+      console.error('Error stopping speech recognition:', error);
+      Alert.alert('Error', 'Failed to stop speech recognition');
+    }
+  };
+
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       style={styles.container}
     >
-      <View style={styles.header}>
+        <View style={styles.header}>
         <Text style={styles.headerTitle}>AA Counselor</Text>
         <TouchableOpacity onPress={onClose} style={styles.closeButton}>
           <Ionicons name="close" size={24} color="#007AFF" />
         </TouchableOpacity>
-      </View>
-      
+        </View>
+        
       <ScrollView
         ref={scrollViewRef}
         style={styles.messagesContainer}
@@ -901,6 +960,19 @@ The explanation should be comprehensive and detailed, not just a brief sentence.
           onKeyPress={handleKeyPress}
           onSubmitEditing={Platform.OS !== 'web' ? handleSend : undefined}
         />
+        <TouchableOpacity
+          style={[
+            styles.micButton,
+            isRecording && styles.micButtonActive
+          ]}
+          onPress={isRecording ? stopRecording : startRecording}
+        >
+          <Ionicons 
+            name={isRecording ? "mic" : "mic-outline"} 
+            size={24} 
+            color={isRecording ? "#FF3B30" : "#007AFF"} 
+          />
+        </TouchableOpacity>
         <TouchableOpacity
           style={[
             styles.sendButton,
@@ -987,6 +1059,17 @@ const styles = StyleSheet.create({
     marginRight: 8,
     fontSize: 16,
     maxHeight: 100,
+  },
+  micButton: {
+    padding: 8,
+    marginRight: 8,
+    borderRadius: 20,
+    backgroundColor: '#F2F2F7',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  micButtonActive: {
+    backgroundColor: '#FFE5E5',
   },
   sendButton: {
     backgroundColor: '#007AFF',
