@@ -20,7 +20,6 @@ import { Asset } from 'expo-asset';
 import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import SummaryGraph from './SummaryGraph';
-import { Audio } from 'expo-av';
 import Voice, { SpeechResultsEvent, SpeechErrorEvent } from '@react-native-community/voice';
 
 console.log('SummaryGraph imported:', SummaryGraph);
@@ -77,7 +76,6 @@ export default function Chat({ onClose }: ChatProps) {
   const [answeredQuestions, setAnsweredQuestions] = useState<Set<number>>(new Set());
   const [isRecording, setIsRecording] = useState(false);
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
-  const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const recognitionRef = useRef<any>(null);
 
   // Add logging for initial state
@@ -243,6 +241,18 @@ export default function Chat({ onClose }: ChatProps) {
           // Convert 'assistant' to 'model', but keep 'model' as is
           const role = msg.role === 'assistant' ? 'model' : msg.role;
           console.log('Converted role:', role);
+          
+          // Check if this is a summary message
+          if (msg.type === 'summary' && msg.priority_areas) {
+            return {
+              role: role as 'user' | 'model',
+              content: msg.content,
+              timestamp: new Date(msg.created_at),
+              type: 'summary' as const,
+              priorityAreas: msg.priority_areas
+            };
+          }
+          
           return {
             role: role as 'user' | 'model',
             content: msg.content,
@@ -268,6 +278,8 @@ export default function Chat({ onClose }: ChatProps) {
           user_id: userId,
           role: message.role,
           content: message.content,
+          type: message.type,
+          priority_areas: message.type === 'summary' ? message.priorityAreas : null
         });
 
       if (error) throw error;
@@ -569,7 +581,18 @@ Use this context to inform your responses, but maintain a natural conversation f
               setPriorityAreas(jsonData.priorityAreas);
               await savePriorityAreas(jsonData.priorityAreas);
               
-              // Add summary message to messages array
+              // Extract the human-readable part of the response
+              const humanReadableResponse = text.split('<!--JSON_START-->')[0].trim();
+              
+              // Add the model's response first
+              const modelResponse: Message = {
+                role: 'model',
+                content: humanReadableResponse,
+                timestamp: new Date(),
+                type: 'text'
+              };
+              
+              // Then add the summary message
               const summaryMessage: Message = {
                 role: 'model',
                 content: 'Priority Areas Summary',
@@ -578,16 +601,7 @@ Use this context to inform your responses, but maintain a natural conversation f
                 priorityAreas: jsonData.priorityAreas
               };
               
-              // Extract the human-readable part of the response
-              const humanReadableResponse = text.split('<!--JSON_START-->')[0].trim();
-              
-              const modelResponse: Message = {
-                role: 'model',
-                content: humanReadableResponse,
-                timestamp: new Date(),
-                type: 'text'
-              };
-              
+              // Add both messages in sequence
               setMessages(prev => [...prev, modelResponse, summaryMessage]);
               await saveMessage(modelResponse);
               await saveMessage(summaryMessage);
@@ -708,6 +722,16 @@ Use this context to inform your responses, but maintain a natural conversation f
 
   const requestPriorityAreas = async () => {
     try {
+      console.log('Current messages:', messages);
+      console.log('Has summary message:', messages.some(msg => msg.type === 'summary'));
+      
+      // If summary is already showing, remove it from messages
+      if (messages.some(msg => msg.type === 'summary')) {
+        console.log('Removing summary message');
+        setMessages(prev => prev.filter(msg => msg.type !== 'summary'));
+        return;
+      }
+
       console.log('Current priority areas before loading:', priorityAreas);
       
       // First try to load existing priority areas from the database
@@ -715,9 +739,18 @@ Use this context to inform your responses, but maintain a natural conversation f
       
       console.log('Priority areas after loading:', priorityAreas);
       
-      // If we have priority areas, no need to request from Gemini
+      // If we have priority areas, add them to messages
       if (priorityAreas.length > 0) {
         console.log('Using existing priority areas from database');
+        const summaryMessage: Message = {
+          role: 'model',
+          content: 'Priority Areas Summary',
+          timestamp: new Date(),
+          type: 'summary',
+          priorityAreas: priorityAreas
+        };
+        console.log('Adding summary message:', summaryMessage);
+        setMessages(prev => [...prev, summaryMessage]);
         return;
       }
 
@@ -896,6 +929,20 @@ The explanation should be comprehensive and detailed, not just a brief sentence.
     }
   };
 
+  // Add this function to check for summary messages
+  const hasSummaryMessage = () => {
+    const hasSummary = messages.some(msg => {
+      console.log('Checking message for summary:', {
+        type: msg.type,
+        content: msg.content,
+        priorityAreas: msg.priorityAreas
+      });
+      return msg.type === 'summary';
+    });
+    console.log('Has summary message:', hasSummary);
+    return hasSummary;
+  };
+
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -937,13 +984,6 @@ The explanation should be comprehensive and detailed, not just a brief sentence.
         {isLoading && (
           <View style={[styles.messageContainer, styles.assistantMessage]}>
             <Text style={styles.messageText}>Thinking...</Text>
-          </View>
-        )}
-        {showSummary && priorityAreas.length > 0 && (
-          <View style={[styles.messageContainer, styles.assistantMessage]}>
-            <View style={styles.summaryWrapper}>
-              <SummaryGraph priorityAreas={priorityAreas} />
-            </View>
           </View>
         )}
       </ScrollView>
@@ -988,7 +1028,9 @@ The explanation should be comprehensive and detailed, not just a brief sentence.
         style={styles.requestButton}
         onPress={requestPriorityAreas}
       >
-        <Text style={styles.requestButtonText}>Show Priority Areas</Text>
+        <Text style={styles.requestButtonText}>
+          {hasSummaryMessage() ? 'Hide Priority Areas' : 'Show Priority Areas'}
+        </Text>
       </TouchableOpacity>
     </KeyboardAvoidingView>
   );
@@ -1088,7 +1130,7 @@ const styles = StyleSheet.create({
   },
   summaryWrapper: {
     width: '100%',
-    marginVertical: 16,
+    marginVertical: 8,
   },
   requestButton: {
     backgroundColor: '#007AFF',
